@@ -1,0 +1,862 @@
+/**
+  ******************************************************************************
+  * File Name          : main.c
+  * Description        : Main program body
+  ******************************************************************************
+  *
+  * COPYRIGHT(c) 2016 STMicroelectronics
+  *
+  * Redistribution and use in source and binary forms, with or without modification,
+  * are permitted provided that the following conditions are met:
+  *   1. Redistributions of source code must retain the above copyright notice,
+  *      this list of conditions and the following disclaimer.
+  *   2. Redistributions in binary form must reproduce the above copyright notice,
+  *      this list of conditions and the following disclaimer in the documentation
+  *      and/or other materials provided with the distribution.
+  *   3. Neither the name of STMicroelectronics nor the names of its contributors
+  *      may be used to endorse or promote products derived from this software
+  *      without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  *
+  ******************************************************************************
+  */
+/* Includes ------------------------------------------------------------------*/
+#include "stm32f1xx_hal.h"
+#include "tim.h"
+#include "usart.h"
+#include "gpio.h"
+
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+void Error_Handler(void);
+
+/* USER CODE BEGIN PFP */
+/* Private function prototypes -----------------------------------------------*/
+
+/* USER CODE END PFP */
+
+/* USER CODE BEGIN 0 */
+#include "stdio.h"
+#include "stdlib.h"
+#include <stdio.h>
+#ifdef __GNUC__
+/* With GCC/RAISONANCE, small printf (option LD Linker->Libraries->Small printf
+   set to 'Yes') calls __io_putchar() */
+#define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
+#else
+#define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
+#define GETCHAR_PROTOTYPE int fgetc(FILE *f)
+#endif /* __GNUC__ */
+PUTCHAR_PROTOTYPE
+{
+  /* Place your implementation of fputc here */
+  /* e.g. write a character to the USART */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+  HAL_UART_Transmit(&huart1, (uint8_t*)&ch, 1, 100);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+  /* Loop until the end of transmission */
+  return ch;
+}
+#define PWM_Period      7200    // gia tri PWM toi da
+#define PPR             1600    // so xung tren 1 vong
+#define DPR             10      // buoc cua visme -> dung cho ham chuyen doi
+#define bot_limit       -80000  // hanh trinh toi da cua visme
+#define top_limit       0       // gioi han tren
+// Bien dung de dieu khien dong co
+int32_t total_pluse = 0,  new_pluse = 0, old_pluse = 0,pluse_offset=0;
+int32_t sp_sub;// truyen setpoint trung gian
+int32_t counter=0;
+// Bien nha truyen nhan du lieu
+uint8_t  Rx_data, Rx_indx,  Transfer_cplt, x_counter, y_counter, f_counter, g_counter, t_counter; //Khai bao cac bien de nhan du lieu
+uint8_t x_buff[16], y_buff[16], f_buff[16], t_buff[16], Rx_Buffer[100], buffer[100],data_sensor;
+int32_t real_speed,count_ms=0,cp=0,total_sss;
+uint32_t len; // do dai chuoi nhan dc
+// Bien dieu khien tgian
+uint8_t  flag_timer_tim4;
+uint32_t new_time_calculator_PID, old_time_calculator_PID, _timer, old_time_update_speed, new_time_update_speed,new_test_time,old_test_time,new_time_check_sensor,old_time_check_sensor,new_time_sethome,old_time_sethome,new_time_requset,old_time_request;
+// thong so cai dat
+float x=0.0; // x,y vi tri se chay den
+uint32_t f,y, time_request;// f van toc, time_request tgian tra loi cac thong so cho may tinh
+int32_t sp_arr[100], plus_position;// sp_arr mang chia nho cac setpoint ra,
+int32_t temp_dc_position=0,temp_step_positon=0,time_requset_offset=100;
+uint8_t g_command, m_command, r_command, reciver_cmd = 0, allow_run = 0, update_setpoint_flag = 0,old_cmd=0,step_set_home=0,flag_request=0,flag_over_distance=0;
+enum machine_state {NONE=0,STOP,START,SET_HOME,RUN,OVER_DISTANCE};
+uint8_t step_program=NONE,flag_notification=0;
+typedef struct
+{
+  int32_t Setpoint;
+  int32_t set_accelerator;
+  int32_t set_speed;
+  int32_t speed;
+  int32_t pre_speed;
+  int32_t Kp;
+  int32_t Ki;
+  int32_t Kd;
+  int32_t pre_Err;
+  int32_t Err;
+  int32_t pPart;
+  int32_t iPart;
+  int32_t dPart;
+  int32_t Output;
+} motor_parameter;
+typedef struct
+{
+  int32_t now_position;
+  int32_t old_position;
+  int32_t run_pluse;
+  int32_t dir;
+  uint32_t now_time;
+  uint32_t old_time;
+  uint32_t off_set;
+} step_motor;
+
+step_motor my_step;
+motor_parameter my_motor;
+void process_pluse(void);// do va xu ly tin hieu encoder
+void Motor_Position(int32_t SP, int32_t PV);// tinh toan PID vi tri
+void HAL_SYSTICK_Callback(void);// chuong trinh ngat system stick
+uint32_t millis(void);// chuong trinh tao millis tu system stick
+void Run_step_motor(uint8_t pluse, uint8_t dir);// chuong trinh dieu khien step motor
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);// chuong trinh ngat timer 4
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);// chuong trinh ngat uart
+void update_new_setpoint_new_speed(void);// cap nhat gia tri setpoint moi nhan tu may tinh
+void process_data_recive(void);// xu ly du lieu nhan dc tu may tinh
+uint8_t check_limit_switch(void);// kiem tra Limit Switch
+void control_motor_program(void);// chua ham tinh PID va ham dieu khien step
+int32_t conver_distance_to_pluse(float decimail_distance);// ham chuyen doi vi tri nhan dc sang xung
+void machine_state(void);// chuong trinh chua trang thai hien tai cua may
+void requset_machine_state(void);
+/* USER CODE END 0 */
+
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration----------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_TIM3_Init();
+  MX_USART1_UART_Init();
+  MX_TIM2_Init();
+  MX_TIM4_Init();
+
+  /* USER CODE BEGIN 2 */
+  HAL_TIM_Encoder_Start_IT(&htim3, TIM_CHANNEL_ALL);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+  HAL_TIMEx_PWMN_Start(&htim2, TIM_CHANNEL_3);
+  my_motor.Kp = 19;
+  my_motor.Ki = 3;
+  my_motor.Kd = 1;
+  my_motor.pre_speed = 0;
+  //printf("Hello\r \n");
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET);
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+  /* USER CODE END WHILE */
+
+  /* USER CODE BEGIN 3 */
+    new_time_calculator_PID = millis();
+    my_step.now_time = millis();
+    new_time_update_speed = millis();
+		new_test_time=millis();
+    HAL_UART_Receive_IT(&huart1, &Rx_data, 1); //Kich hoat ngat uart khi nhan duoc 1 byte
+    HAL_TIM_Base_Start_IT(&htim4);
+    process_pluse();
+		requset_machine_state();
+    update_new_setpoint_new_speed();
+    process_data_recive();
+		control_motor_program();
+		machine_state();
+		if(new_test_time-old_test_time>10)
+		{
+//			if(HAL_GPIO_ReadPin(GPIOA,GPIO_PIN_3)==1)
+//			{
+//					printf("cham cb\n");
+//			}
+			//printf("check sensor: %d\n",check_limit_switch());	
+			my_motor.speed = total_pluse - my_motor.pre_speed;
+			my_motor.pre_speed =total_pluse;	
+			real_speed=100*my_motor.speed*DPR/PPR;
+			real_speed=abs(real_speed);
+			//if(real_speed>=f)real_speed=f;
+		old_test_time=new_test_time;
+		}
+  }
+  /* USER CODE END 3 */
+
+}
+
+/** System Clock Configuration
+*/
+void SystemClock_Config(void)
+{
+
+  RCC_OscInitTypeDef RCC_OscInitStruct;
+  RCC_ClkInitTypeDef RCC_ClkInitStruct;
+
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  HAL_SYSTICK_Config(HAL_RCC_GetHCLKFreq()/1000);
+
+  HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
+
+  /* SysTick_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
+}
+
+/* USER CODE BEGIN 4 */
+void process_pluse(void)
+{
+  new_pluse = TIM3->CNT;
+
+  if (new_pluse - old_pluse != 0)
+  {
+    if ((TIM3->CR1) & 0x10) // true = giam
+    {
+      total_pluse -= 1;
+    }
+    else
+    {
+      total_pluse += 1;
+    }
+    old_pluse = new_pluse;
+  }
+}
+void Motor_Position(int32_t SP, int32_t PV)
+{
+  my_motor.Err = SP - PV;
+  my_motor.pPart = my_motor.Kp * my_motor.Err;
+  my_motor.dPart = my_motor.Kd * (my_motor.Err - my_motor.pre_Err);
+  my_motor.iPart += my_motor.Ki * my_motor.Err/1000;
+  my_motor.pre_Err = my_motor.Err;
+  my_motor.Output = my_motor.pPart + my_motor.dPart + my_motor.iPart;
+  if (my_motor.Output < 0)
+  {
+    my_motor.Output = -my_motor.Output;
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
+  }
+  else
+  {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET);
+  }
+  if (my_motor.Output >= PWM_Period) my_motor.Output = PWM_Period;
+  TIM2->CCR3 = my_motor.Output;
+  
+}
+void HAL_SYSTICK_Callback(void)
+{
+  _timer++;
+}
+uint32_t millis(void)
+{
+  return _timer;
+}
+void Run_step_motor(uint8_t pluse, uint8_t dir)
+{
+  if (dir == 1)
+  {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+    my_step.run_pluse = -my_step.run_pluse;
+  }
+  else
+  {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+  }
+  if (pluse)
+  {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+    pluse = 0;
+  }
+  else
+  {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+  }
+}
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  if (htim->Instance == TIM4)
+  {
+    flag_timer_tim4 = 1;
+		
+  }
+}
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  uint8_t i;
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+  if (Rx_indx == 0) {
+    for (i = 0; i < 100; i++) Rx_Buffer[i] = 0; //xoa Rx_Buffer truoc khi nhan du lieu
+  }
+  if (huart->Instance == USART1)  //UART hien tai la uart3
+  {
+    if (Rx_data != 13) //Neu du lieu nhan duoc khac voi 13 (13 la ma cua phim enter)
+    {
+      Rx_Buffer[Rx_indx++] = Rx_data; //them du lieu vao Rx_Buffer
+    }
+    else      //Neu phim enter duoc an
+    {
+      Rx_indx = 0; //Dua index ve 0
+      Transfer_cplt = 1; //Qua trinh truyen hoan tat, du lieu da san sang de doc
+    }
+    HAL_UART_Receive_IT(&huart1, &Rx_data, 1);  //Kich hoat UART nhan du lieu ngat moi luc
+  }
+}
+void update_new_setpoint_new_speed(void)
+{
+	
+  if (new_time_update_speed - old_time_update_speed > 1)
+  {
+		if(cp)
+		{
+			count_ms++;
+		}
+    if (update_setpoint_flag)
+    {
+			
+     	for (uint8_t i = 0; i < 100; i++)
+      {
+        sp_arr[i] = total_sss * i / 100;
+      }
+      update_setpoint_flag = 0;
+      allow_run = 1;cp=1;
+
+    }
+    if (allow_run)
+    {
+
+      if (abs(counter) <= abs(sp_arr[1]))
+      {
+        plus_position = 1*(f+100)/100;
+      }
+			else if (abs(counter) <= abs(sp_arr[2]))
+      {
+        plus_position = 3*(f+100)/100;
+      }
+			else if (abs(counter) <= abs(sp_arr[3]))
+      {
+        plus_position = 6*(f+100)/100;
+      }
+      else if (abs(counter) <= abs(sp_arr[4]))
+      {
+        plus_position = 9*(f+100)/100;
+      }
+      else if (abs(counter) <= abs(sp_arr[5]))
+      {
+        plus_position = 12*(f+100)/100;
+      }
+      else if (abs(counter) <= abs(sp_arr[6]))
+      {
+        plus_position = 15*(f+100)/100;
+      }
+      else if (abs(counter) <= abs(sp_arr[7]))
+      {
+        plus_position = 18*(f+100)/100;
+      }
+      else if (abs(counter) <= abs(sp_arr[8]))
+      {
+        plus_position = 21*(f+100)/100;
+      }
+			else if (abs(counter) <= abs(sp_arr[9]))
+      {
+        plus_position = 24*(f+100)/100;
+      }
+      else if (abs(counter) <= abs(sp_arr[10]))
+      {
+        plus_position = 30*(f+100)/100;
+      }
+			else if (abs(counter) <= abs(sp_arr[90]))
+      {
+        plus_position = 30*(f+100)/100;
+      }
+			 else if (abs(counter) <= abs(sp_arr[91]))
+      {
+        plus_position = 24*(f+100)/100;
+      }
+			 else if (abs(counter) <= abs(sp_arr[92]))
+      {
+        plus_position = 21*(f+100)/100;
+      }
+      else if (abs(counter) <= abs(sp_arr[93]))
+      {
+        plus_position = 18*(f+100)/100;
+      }
+      else if (abs(counter) <= abs(sp_arr[94]))
+      {
+        plus_position = 15*(f+100)/100;
+      }
+      else if (abs(counter) <= abs(sp_arr[95]))
+      {
+        plus_position = 12*(f+100)/100;
+      }
+			  else if (abs(counter) <= abs(sp_arr[96]))
+      {
+        plus_position = 9*(f+100)/100;
+      }
+			  else if (abs(counter) <= abs(sp_arr[97]))
+      {
+        plus_position = 6*(f+100)/100;
+      }
+			  else if (abs(counter) <= abs(sp_arr[98]))
+      {
+        plus_position = 3*(f+100)/100;
+      }
+			  else if (abs(counter) <= abs(sp_arr[99]))
+      {
+        plus_position = 1*(f+100)/100;
+      }
+      if (my_motor.Setpoint - total_pluse > 0)
+      {
+        //sp_sub += 30;
+				 sp_sub += plus_position;
+				counter+=plus_position;
+        if (sp_sub >= my_motor.Setpoint) 
+				{
+          sp_sub = my_motor.Setpoint;
+					my_motor.speed=0;
+					my_motor.pre_speed = my_motor.speed;
+					counter=0;
+          allow_run = 0;cp=0;
+					update_setpoint_flag=0;
+        }
+      }
+      else
+      {
+				//sp_sub -= 30;
+        sp_sub -= plus_position;
+				counter+=plus_position;
+        if (sp_sub <= my_motor.Setpoint) {
+          sp_sub = my_motor.Setpoint;
+					my_motor.speed=0;my_motor.pre_speed = my_motor.speed;
+					counter=0;
+          allow_run = 0;cp=0;
+					update_setpoint_flag=0;
+        }
+      }
+    }
+    old_time_update_speed = new_time_update_speed;
+  }
+}
+void process_data_recive(void)
+{
+  if (Transfer_cplt)
+  {
+    sprintf(buffer, "%s\r\n", Rx_Buffer); // IN bufer
+    len = strlen(buffer); //Lay chieu dai cua buffer
+    //printf("%s\n", buffer);
+    for (uint8_t i = 0; i < 10; i++)
+    {
+      if (buffer[i] == 'G')
+      {
+        reciver_cmd = 1;
+      }
+      if (buffer[i] == 'M')
+      {
+        reciver_cmd = 2;
+        m_command = buffer[i + 1] - 48;
+      }
+      if (buffer[i] == 'R')
+      {
+        reciver_cmd = 3;
+        r_command = buffer[i + 1] - 48;
+        t_counter = i + 3;
+      }
+    }
+    if (reciver_cmd == 1)
+    {
+      for (uint8_t i = 0; i < len; i++)
+      {
+
+        if (buffer[i] == 'X')
+        {
+          g_counter = i + 1;
+
+        }
+        if (buffer[i] == 'Y')
+        {
+          x_counter = i + 1;
+
+        }
+        if (buffer[i] == 'F')
+        {
+          y_counter = i + 1;
+        }
+      }
+      f_counter = len;
+      for (uint8_t i = 0; i < g_counter - 1; i++)
+      {
+        g_command = buffer[i] - 48;
+				
+				if(g_command==1)
+				{
+					step_program=RUN;
+					old_cmd=RUN;
+				}
+				else
+				{
+					//total_pluse=0;sp_sub=0;my_motor.Setpoint=0;update_setpoint_flag=0;x=0;y=0;f=0;
+					step_set_home=0;
+					step_program=SET_HOME;
+					old_cmd=SET_HOME;
+				}
+      }
+      for (uint8_t i = g_counter; i < x_counter - 1; i++)
+      {
+        x_buff[i - g_counter] = buffer[i];
+      }
+      for (uint8_t i = x_counter; i < y_counter - 1; i++)
+      {
+        y_buff[i - x_counter] = buffer[i];
+      }
+      for (uint8_t i = y_counter; i < f_counter - 1; i++)
+      {
+        f_buff[i - y_counter] = buffer[i];
+      }
+			if(g_command==1)
+				{
+					 x = atof(x_buff);
+						y = atof(y_buff);
+      f = atoi(f_buff);
+			my_motor.Setpoint=conver_distance_to_pluse(x);
+			total_sss=abs(my_motor.Setpoint - total_pluse);
+				}
+     
+      for (uint8_t i = 0; i < 16; i++)
+      {
+        x_buff[i] = 0x00;
+        y_buff[i] = 0x00;
+        f_buff[i] = 0x00;
+      }
+      reciver_cmd = 0;
+			
+      for (uint8_t i = 0; i < 100; i++)
+      {
+        buffer[i] = 0x00;
+      }
+    }
+    else if (reciver_cmd == 2)
+    {
+      if (m_command == 1)
+      {
+        printf("M1\n");
+				step_program=START;
+      }
+      else
+      {
+        printf("M0\n");
+				step_program=STOP;
+      }
+      reciver_cmd = 0;
+      for (uint8_t i = 0; i < 100; i++)
+      {
+        buffer[i] = 0x00;
+      }
+    }
+    else if (reciver_cmd == 3)
+    {
+      if (r_command)
+      {
+        for (uint8_t i = t_counter; i < len - 1; i++)
+        {
+          t_buff[i - t_counter] = buffer[i];
+        }
+        time_request = atoi(t_buff);
+        printf("R1T%d\n", time_request);
+        reciver_cmd = 0;
+				flag_request=1;time_requset_offset=time_request;
+        for (uint8_t i = 0; i < 100; i++)
+        {
+          buffer[i] = 0x00;
+        }
+      }
+      else
+      {
+				flag_request=0;
+        printf("R0\n");
+      }
+    }
+    Transfer_cplt = 0; //Reset lai bien tranfer_complete
+  }
+}
+uint8_t check_limit_switch(void)
+{
+	uint8_t data=0x00;
+	data|=HAL_GPIO_ReadPin(GPIOA,GPIO_PIN_2);
+	data|=HAL_GPIO_ReadPin(GPIOA,GPIO_PIN_3)<<1;
+	data|=HAL_GPIO_ReadPin(GPIOA,GPIO_PIN_4)<<2;
+	data|=HAL_GPIO_ReadPin(GPIOA,GPIO_PIN_5)<<3;
+	return data;
+}
+void control_motor_program(void)
+{
+	if (new_time_calculator_PID - old_time_calculator_PID > 1)
+    {
+      Motor_Position(sp_sub, total_pluse+pluse_offset);
+			//Motor_Position(my_motor.Setpoint, total_pluse);
+      old_time_calculator_PID = new_time_calculator_PID;
+    }
+    if (my_step.now_position > 0)
+    {
+      Run_step_motor(1, my_step.dir);
+      my_step.now_position--;
+    }
+}
+int32_t conver_distance_to_pluse(float decimail_distance)
+{
+	float data=0.0;
+	data=PPR*decimail_distance/DPR;
+	return (int32_t)data;
+
+}
+void machine_state(void)
+{
+	switch(step_program)
+	{
+		case STOP:
+		{
+			temp_dc_position=my_motor.Setpoint;
+			temp_step_positon=my_step.now_position;
+			my_motor.Setpoint=total_pluse;
+			sp_sub=total_pluse;
+			my_step.now_position=0;
+			break;
+		}
+		case START:
+		{
+			my_motor.Setpoint=temp_dc_position;
+			sp_sub=total_pluse;
+			my_step.now_position=temp_step_positon;
+			update_setpoint_flag=1;
+			if(old_cmd==RUN)
+			{
+				step_program=RUN;
+			}
+			else if(old_cmd==SET_HOME)
+			{
+				step_program=SET_HOME;
+			}
+			break;
+		}
+		case SET_HOME:
+		{
+			
+			switch(step_set_home)
+			{
+				case 0:
+				{
+					new_time_sethome=millis();
+					if(new_time_sethome-old_time_sethome>1)
+					{
+						data_sensor=check_limit_switch();
+						sp_sub+=50;
+						if(data_sensor&0x02)
+						{
+							sp_sub=total_pluse;
+							step_set_home=1;
+						}
+					
+						old_time_sethome=new_time_sethome;
+					}
+					
+					break;
+				}
+				case 1:
+				{
+					flag_over_distance=0;total_pluse=0;sp_sub=0;my_motor.Setpoint=0;update_setpoint_flag=0;x=0;y=0;f=0;
+					step_set_home=2;
+							old_time_check_sensor=new_time_check_sensor;
+					
+					break;
+				}
+				case 2:
+				{
+					new_time_sethome=millis();
+					if(new_time_sethome-old_time_sethome>1)
+					{
+						data_sensor=check_limit_switch();
+						if(data_sensor&0x01)
+						{
+							sp_sub=total_pluse;
+							step_set_home=3;
+						}
+						else
+						{
+							sp_sub+=10;
+							step_set_home=2;
+						}
+						old_time_sethome=new_time_sethome;
+					}
+					break;
+				}
+					case 3:
+				{
+					
+					step_set_home=0;
+					flag_over_distance=0;total_pluse=0;sp_sub=0;my_motor.Setpoint=0;update_setpoint_flag=0;x=0;y=0;f=0;
+					//HAL_Delay(1);
+					step_program=RUN;
+					
+					break;
+				}
+				default:break;
+			}
+			break;
+		}
+		case RUN:
+		{
+			my_motor.Setpoint=conver_distance_to_pluse(x);
+			update_setpoint_flag=1;
+			new_time_sethome=millis();
+			if(new_time_sethome-old_time_sethome>10)
+			{
+				data_sensor=check_limit_switch();
+				if(data_sensor&0x04)
+				{
+					step_program=OVER_DISTANCE;
+				}
+				else
+				{
+					step_program=RUN;
+				}
+				old_time_sethome=new_time_sethome;
+			}
+			break;
+		}
+		case OVER_DISTANCE:
+		{
+			flag_over_distance=1;
+//			my_motor.Setpoint=total_pluse;
+//			total_sss=0;
+//			sp_sub=total_pluse;
+//			my_step.now_position=0;
+//			my_step.now_position=0;
+//			update_setpoint_flag=1;
+			break;
+		}
+		default: break;
+	}
+}
+void requset_machine_state(void)
+{
+	float temp_x=0.0;
+	new_time_requset=millis();
+	if(new_time_requset-old_time_request>time_requset_offset)
+	{
+		temp_x=(float)DPR*total_pluse/PPR;
+		if(flag_over_distance!=0)
+		{
+			printf("M3X%3.2fF%d\n",temp_x,f);
+		}
+		else
+		{
+			if(flag_request)
+			{
+				
+				printf("X%3.2fF%d\n",temp_x,f);
+			}
+		}
+		old_time_request=new_time_requset;
+	}
+}
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @param  None
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler */
+  /* User can add his own implementation to report the HAL error return state */
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler */ 
+}
+
+#ifdef USE_FULL_ASSERT
+
+/**
+   * @brief Reports the name of the source file and the source line number
+   * where the assert_param error has occurred.
+   * @param file: pointer to the source file name
+   * @param line: assert_param error line source number
+   * @retval None
+   */
+void assert_failed(uint8_t* file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+    ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+
+}
+
+#endif
+
+/**
+  * @}
+  */ 
+
+/**
+  * @}
+*/ 
+
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
+

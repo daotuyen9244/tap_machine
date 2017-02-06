@@ -1,0 +1,26 @@
+--cpu Cortex-M3
+"tap_machine_v1\system_stm32f1xx.o"
+"tap_machine_v1\startup_stm32f103xb.o"
+"tap_machine_v1\main.o"
+"tap_machine_v1\stm32f1xx_hal_msp.o"
+"tap_machine_v1\stm32f1xx_it.o"
+"tap_machine_v1\gpio.o"
+"tap_machine_v1\tim.o"
+"tap_machine_v1\usart.o"
+"tap_machine_v1\stm32f1xx_hal_gpio_ex.o"
+"tap_machine_v1\stm32f1xx_hal_flash.o"
+"tap_machine_v1\stm32f1xx_hal_uart.o"
+"tap_machine_v1\stm32f1xx_hal_cortex.o"
+"tap_machine_v1\stm32f1xx_hal_rcc.o"
+"tap_machine_v1\stm32f1xx_hal_tim_ex.o"
+"tap_machine_v1\stm32f1xx_hal_tim.o"
+"tap_machine_v1\stm32f1xx_hal.o"
+"tap_machine_v1\stm32f1xx_hal_pwr.o"
+"tap_machine_v1\stm32f1xx_hal_dma.o"
+"tap_machine_v1\stm32f1xx_hal_flash_ex.o"
+"tap_machine_v1\stm32f1xx_hal_rcc_ex.o"
+"tap_machine_v1\stm32f1xx_hal_gpio.o"
+--library_type=microlib --strict --scatter "Tap_machine_v1\Tap_machine_v1.sct"
+--diag_suppress=L6329 --summary_stderr --info summarysizes --map --xref --callgraph --symbols
+--info sizes --info totals --info unused --info veneers
+--list "Tap_machine_v1.map" -o Tap_machine_v1\Tap_machine_v1.axf

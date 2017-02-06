@@ -1,0 +1,739 @@
+/**
+  ******************************************************************************
+  * File Name          : main.c
+  * Description        : Main program body
+  ******************************************************************************
+  *
+  * COPYRIGHT(c) 2016 STMicroelectronics
+  *
+  * Redistribution and use in source and binary forms, with or without modification,
+  * are permitted provided that the following conditions are met:
+  *   1. Redistributions of source code must retain the above copyright notice,
+  *      this list of conditions and the following disclaimer.
+  *   2. Redistributions in binary form must reproduce the above copyright notice,
+  *      this list of conditions and the following disclaimer in the documentation
+  *      and/or other materials provided with the distribution.
+  *   3. Neither the name of STMicroelectronics nor the names of its contributors
+  *      may be used to endorse or promote products derived from this software
+  *      without specific prior written permission.
+  *
+  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+  * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  *
+  ******************************************************************************
+  */
+/* Includes ------------------------------------------------------------------*/
+#include "stm32f1xx_hal.h"
+#include "tim.h"
+#include "usart.h"
+#include "gpio.h"
+
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+void Error_Handler(void);
+
+/* USER CODE BEGIN PFP */
+/* Private function prototypes -----------------------------------------------*/
+
+/* USER CODE END PFP */
+
+/* USER CODE BEGIN 0 */
+#include "stdio.h"
+#include "stdlib.h"
+#include <stdio.h>
+#ifdef __GNUC__
+  /* With GCC/RAISONANCE, small printf (option LD Linker->Libraries->Small printf
+     set to 'Yes') calls __io_putchar() */
+  #define PUTCHAR_PROTOTYPE int __io_putchar(int ch)
+#else
+  #define PUTCHAR_PROTOTYPE int fputc(int ch, FILE *f)
+  #define GETCHAR_PROTOTYPE int fgetc(FILE *f)
+#endif /* __GNUC__ */
+	PUTCHAR_PROTOTYPE
+{
+  /* Place your implementation of fputc here */
+  /* e.g. write a character to the USART */
+	HAL_GPIO_WritePin(GPIOA,GPIO_PIN_8,1);
+	HAL_UART_Transmit(&huart1, (uint8_t*)&ch,1,100);
+	HAL_GPIO_WritePin(GPIOA,GPIO_PIN_8,0);
+  /* Loop until the end of transmission */
+
+
+  return ch;
+}
+#define Sampling_time		1	 //thoi gian lay mau (ms)
+#define inv_Sampling_time	100 	 // 1/Sampling_time 
+#define PWM_Period			7200 //8000 cycles = 1ms, f=8MHz
+int32_t total_pluse_left=0,Pulse=0,new_pluse_left=0,old_pluse_left=0,i,hhh;
+uint8_t Rx_data,Tx_data;
+uint32_t pwm=0,old_time,new_time,_timer,old_time_1,new_time_1;
+int32_t sp_sub,start=0,count_timer;
+uint8_t  Rx_indx, Rx_Buffer[100], buffer[100], Transfer_cplt,x_counter,y_counter,f_counter,g_counter,t_counter; //Khai bao cac bien de nhan du lieu
+uint8_t step,flag_timer;
+uint32_t len;
+uint32_t f,time_request,test_f=100;
+int32_t sp_arr[100],update_sp,acc_c;
+float x,y;
+uint8_t g,m,r,cmd=0,allow=0;
+uint8_t x_buff[16],y_buff[16],f_buff[16],t_buff[16];
+	 int32_t          _currentPos;    // Steps
+  int32_t           _targetPos;     // Steps
+  float          _speed;         // Steps per second
+  float          _maxSpeed;
+  float          _acceleration;
+   uint32_t _stepInterval;
+  uint32_t _lastStepTime;
+
+
+typedef struct 
+{
+	int32_t Setpoint;
+	int32_t Old_setpoint;
+	int32_t Delta;
+	int32_t accelerator;
+	int32_t speed;
+	int32_t pre_speed;
+	int32_t Kp;
+	int32_t Ki;
+	int32_t Kd;
+	int32_t pre_Err;
+	int32_t Err;
+	int32_t pPart;
+	int32_t iPart;
+	int32_t dPart;
+	int32_t Output;
+}motor_parameter;
+typedef struct 
+{
+	int32_t now_position;
+	int32_t old_position;
+	int32_t run_pluse;
+	int32_t dir;
+	uint32_t now_time;
+	uint32_t old_time;
+	uint32_t off_set;
+}step_motor;
+step_motor my_step;
+motor_parameter my_motor;
+void process_pluse()
+{
+	new_pluse_left=TIM3->CNT;
+	
+	if(new_pluse_left-old_pluse_left!=0)
+	{
+		i=new_pluse_left-old_pluse_left;
+		if((TIM3->CR1)&0x10) // true = giam
+		{
+		total_pluse_left -= 1;
+		}
+		else
+		{
+		total_pluse_left += 1; 
+		}
+		old_pluse_left=new_pluse_left;
+	}
+}
+
+void Motor_Position(int32_t SP,int32_t PV)
+{  
+					my_motor.Err=SP-PV;  
+					my_motor.pPart=my_motor.Kp*my_motor.Err;
+					my_motor.dPart=my_motor.Kd*(my_motor.Err-my_motor.pre_Err);	
+					my_motor.iPart+=my_motor.Ki*my_motor.Err;
+					my_motor.pre_Err=my_motor.Err;
+					my_motor.Output =my_motor.pPart+my_motor.dPart+my_motor.iPart;     
+					
+					
+					if (my_motor.Output <0)
+						{
+							my_motor.Output =-my_motor.Output;
+							HAL_GPIO_WritePin(GPIOB,GPIO_PIN_2,1);
+						}
+						else
+						{
+						HAL_GPIO_WritePin(GPIOB,GPIO_PIN_2,0);
+						}
+					if (my_motor.Output >=PWM_Period) my_motor.Output=PWM_Period;
+						TIM2->CCR3=my_motor.Output; 			
+					my_motor.pre_speed=my_motor.speed;
+			
+}
+void HAL_SYSTICK_Callback(void)
+{
+_timer++;
+}
+uint32_t millis()
+{
+	return _timer;
+}
+void Run_step_motor(uint8_t pluse,uint8_t dir)
+{
+	if(dir==1)
+	{
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0,1);
+		my_step.run_pluse=-my_step.run_pluse;
+	}
+	else
+	{
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0,0);
+	}
+	if(pluse)
+	{
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_1,1);
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_1,0);
+		pluse=0;
+	}
+	else
+	{
+	HAL_GPIO_WritePin(GPIOB,GPIO_PIN_1,0);
+	}
+}
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+		if(htim->Instance == TIM4)
+	{
+		if(start)
+		{
+			flag_timer=1;
+		}
+		//HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_1); // Thuc hien chop tat led PB12
+	}
+}
+int32_t distanceToGo()
+{
+    return _targetPos - total_pluse_left;
+}
+float desiredSpeed()
+{
+    uint32_t distanceTo = distanceToGo();
+
+    // Max possible speed that can still decelerate in the available distance
+    float requiredSpeed;
+    if (distanceTo == 0)
+	return 0.0; // Were there
+    else if (distanceTo > 0) // Clockwise
+	requiredSpeed = sqrt(2.0 * distanceTo * _acceleration);
+		
+    else  // Anticlockwise
+	requiredSpeed = -sqrt(2.0 * -distanceTo * _acceleration);
+
+    if (requiredSpeed > _speed)
+    {
+	// Need to accelerate in clockwise direction
+	if (_speed == 0)
+	    requiredSpeed = sqrt(2.0 * _acceleration);
+	else
+	    requiredSpeed = _speed + abs(_acceleration / _speed);
+	if (requiredSpeed > _maxSpeed)
+	    requiredSpeed = _maxSpeed;
+    }
+    else if (requiredSpeed < _speed)
+    {
+	// Need to accelerate in anticlockwise direction
+	if (_speed == 0)
+	    requiredSpeed = -sqrt(2.0 * _acceleration);
+	else
+	    requiredSpeed = _speed - abs(_acceleration / _speed);
+	if (requiredSpeed < -_maxSpeed)
+	    requiredSpeed = -_maxSpeed;
+    }
+//  Serial.println(requiredSpeed);
+    return requiredSpeed;
+}
+void setSpeed(float speed)
+{
+    _speed = speed;
+    _stepInterval = abs(1000.0 / _speed);
+}
+float speed()
+{
+    return _speed;
+}
+void computeNewSpeed()
+{
+    setSpeed(desiredSpeed());
+}
+void setAcceleration(float acceleration)
+{
+    _acceleration = acceleration;
+    computeNewSpeed();
+}
+void moveTo(uint32_t absolute)
+{
+    _targetPos = absolute;
+    computeNewSpeed();
+}
+void move(long relative)
+{
+    moveTo(_currentPos + relative);
+}
+uint8_t runSpeed()
+{
+   uint32_t time = millis();
+  
+    if (time > _lastStepTime + _stepInterval)
+    {
+	if (_speed > 0)
+	{
+	    // Clockwise
+		sp_sub+=10;
+		if(sp_sub>=my_motor.Setpoint){sp_sub=my_motor.Setpoint;}
+	    //_currentPos += 1;
+	}
+	else if (_speed < 0)
+	{
+	    // Anticlockwise  
+	    sp_sub-=10;
+		if(sp_sub<=my_motor.Setpoint){sp_sub=my_motor.Setpoint;}
+	}
+	_lastStepTime = time;
+	return 1;
+    }
+    else
+	return 0;
+}
+uint8_t run()
+{
+    if (_targetPos == _currentPos)
+	return 0;
+    
+    if (runSpeed())
+	computeNewSpeed();
+    return 1;
+}
+void setMaxSpeed(float speed)
+{
+    _maxSpeed = speed;
+    computeNewSpeed();
+}
+uint32_t currentPosition()
+{
+    return _currentPos;
+}
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	uint8_t i;
+	HAL_GPIO_WritePin(GPIOA,GPIO_PIN_8,0);
+		if (Rx_indx==0) {for (i=0;i<100;i++) Rx_Buffer[i]=0;}	//xoa Rx_Buffer truoc khi nhan du lieu
+	if (huart->Instance == USART1)	//UART hien tai la uart3
+		{
+		
+		if (Rx_data!=13)	//Neu du lieu nhan duoc khac voi 13 (13 la ma cua phim enter)
+			{
+			Rx_Buffer[Rx_indx++]=Rx_data;	//them du lieu vao Rx_Buffer
+			}
+		else			//Neu phim enter duoc an
+			{
+			Rx_indx=0;	//Dua index ve 0	
+			Transfer_cplt=1;//Qua trinh truyen hoan tat, du lieu da san sang de doc
+			}
+
+		HAL_UART_Receive_IT(&huart1, &Rx_data, 1);	//Kich hoat UART nhan du lieu ngat moi luc
+		}
+
+} 
+/* USER CODE END 0 */
+
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration----------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_TIM3_Init();
+  MX_USART1_UART_Init();
+  MX_USART2_UART_Init();
+  MX_TIM2_Init();
+  MX_TIM4_Init();
+
+  /* USER CODE BEGIN 2 */
+		HAL_TIM_Encoder_Start_IT(&htim3, TIM_CHANNEL_ALL);
+		HAL_TIM_PWM_Start(&htim2,TIM_CHANNEL_3);
+		HAL_TIMEx_PWMN_Start(&htim2,TIM_CHANNEL_3);
+		my_motor.Kp=30;
+		my_motor.Ki=3;
+		my_motor.Kd=4;
+		my_motor.pre_speed=0;
+		my_motor.accelerator=1;
+		printf("Hello\r \n");
+		HAL_GPIO_WritePin(GPIOB,GPIO_PIN_2,0);
+		
+		my_motor.Setpoint=0;
+		moveTo(-60000);
+		setMaxSpeed(500.0);
+		setAcceleration(300.0);
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+  /* USER CODE END WHILE */
+
+  /* USER CODE BEGIN 3 */
+		HAL_UART_Receive_IT(&huart1, &Rx_data, 1); //Kich hoat ngat uart khi nhan duoc 1 byte
+		HAL_TIM_Base_Start_IT(&htim4);
+		new_time=millis();
+		my_step.now_time=millis();
+		new_time_1=millis();
+			process_pluse();
+//		if (distanceToGo() == 0)
+//		{
+//			my_motor.Setpoint=-my_motor.Setpoint;
+//			_targetPos=my_motor.Setpoint;
+//			moveTo(_targetPos);
+//		}
+		if(new_time_1-old_time_1>4)
+		{
+			if(update_sp)
+			{
+				for(hhh=0;hhh<100;hhh++)
+				{
+					sp_arr[hhh]=(my_motor.Setpoint-total_pluse_left)*hhh/100;
+				}
+				update_sp=0;
+				allow=1;
+				
+			}
+			if(allow)
+			{
+			if(abs(total_pluse_left)<=abs(sp_arr[0]))
+			{
+				acc_c=30;
+				
+			}
+//			else if(abs(total_pluse_left)<=abs(sp_arr[1]))
+//			{
+//				acc_c=20;
+//			}
+			else if(abs(total_pluse_left)<=abs(sp_arr[2]))
+			{
+				acc_c=50;
+			}
+//			else if(abs(total_pluse_left)<=abs(sp_arr[3]))
+//			{
+//				acc_c=40;
+//			}
+			else if(abs(total_pluse_left)<=abs(sp_arr[4]))
+			{
+				acc_c=70;
+			}
+//			else if(abs(total_pluse_left)<=abs(sp_arr[5]))
+//			{
+//				acc_c=60;
+//			}
+			else if(abs(total_pluse_left)<=abs(sp_arr[6]))
+			{
+				acc_c=90;
+			}
+//			else if(abs(total_pluse_left)<=abs(sp_arr[7]))
+//			{
+//				acc_c=80;
+//			}
+			else if(abs(total_pluse_left)<=abs(sp_arr[8]))
+			{
+				acc_c=90;
+			}
+			else if(abs(total_pluse_left)<=abs(sp_arr[9]))
+			{
+				acc_c=100;
+			}
+			else if(abs(total_pluse_left)<=abs(sp_arr[90]))
+			{
+				acc_c=100;
+			}
+//			else if(abs(total_pluse_left)<=abs(sp_arr[91]))
+//			{
+//				acc_c=80;
+//			}
+			else if(abs(total_pluse_left)<=abs(sp_arr[92]))
+			{
+				acc_c=75;
+			}
+//			else if(abs(total_pluse_left)<=abs(sp_arr[93]))
+//			{
+//				acc_c=60;
+//			}
+			else if(abs(total_pluse_left)<=abs(sp_arr[94]))
+			{
+				acc_c=50;
+			}
+//			else if(abs(total_pluse_left)<=abs(sp_arr[95]))
+//			{
+//				acc_c=40;
+//			}
+			else if(abs(total_pluse_left)<=abs(sp_arr[96]))
+			{
+				acc_c=25;
+			}
+//			else if(abs(total_pluse_left)<=abs(sp_arr[97]))
+//			{
+//				acc_c=20;
+//			}
+			else if(abs(total_pluse_left)<=abs(sp_arr[98]))
+			{
+				acc_c=10;
+			}
+			if(my_motor.Setpoint-total_pluse_left>0)
+				{
+					sp_sub+=acc_c;
+					if(sp_sub>=my_motor.Setpoint){sp_sub=my_motor.Setpoint;allow=0;}
+				}
+		
+				else
+				{
+					sp_sub-=acc_c;
+					if(sp_sub<=my_motor.Setpoint){sp_sub=my_motor.Setpoint;allow=0;}
+				}
+			}
+		
+			old_time_1=new_time_1;
+		}
+		//runSpeed();
+		 //run();
+		if(new_time-old_time>1)
+		{
+			Motor_Position(sp_sub,total_pluse_left);
+		
+			if(my_step.now_position>0)
+			{
+				Run_step_motor(1,my_step.dir);
+				my_step.now_position--;
+			}
+			old_time=new_time;
+		}
+			if (Transfer_cplt)
+			{
+				sprintf(buffer, "%s\r\n", Rx_Buffer); // IN bufer
+				len = strlen(buffer); //Lay chieu dai cua buffer
+				printf("%s\n", buffer);
+				for (uint8_t i = 0; i < 10; i++)
+				{
+					if (buffer[i] == 'G')
+					{
+						cmd = 1;
+					}
+					 if (buffer[i] == 'M')
+					{
+						cmd = 2;
+						m = buffer[i+1] - 48;
+					}
+					 if (buffer[i] == 'R')
+					{
+						cmd = 3;
+						r = buffer[i+1] - 48;
+						t_counter=i+3;
+					}
+				}
+				if (cmd == 1)
+				{
+					for (uint8_t i = 0; i < len; i++)
+					{
+
+						if (buffer[i] == 'X')
+						{
+							g_counter = i + 1;
+
+						}
+						if (buffer[i] == 'Y')
+						{
+							x_counter = i + 1;
+
+						}
+						if (buffer[i] == 'F')
+						{
+							y_counter = i + 1;
+						}
+					}
+					f_counter = len;
+					for (uint8_t i = 0; i < g_counter - 1; i++)
+					{
+						g = buffer[i] - 48;
+					}
+					for (uint8_t i = g_counter; i < x_counter - 1; i++)
+					{
+						x_buff[i - g_counter] = buffer[i];
+					}
+					for (uint8_t i = x_counter; i < y_counter - 1; i++)
+					{
+						y_buff[i - x_counter] = buffer[i];
+					}
+					for (uint8_t i = y_counter; i < f_counter - 1; i++)
+					{
+						f_buff[i - y_counter] = buffer[i];
+					}
+					x = atof(x_buff);
+					y = atof(y_buff);
+					f = atoi(f_buff);
+					printf("g %d\n", g);
+					printf("x %f\n", x);
+					printf("y %f\n", y);
+					printf("f %d\n", f);
+						cmd = 0;
+					for (uint8_t i = 0; i < 100; i++)
+					{
+						buffer[i] = 0x00;
+					}
+				}
+				else if (cmd == 2)
+				{
+					if (m == 1)
+					{
+						printf("run\n");
+					}
+					else
+					{
+						printf("stop\n");
+					}
+						cmd = 0;
+					for (uint8_t i = 0; i < 100; i++)
+					{
+						buffer[i] = 0x00;
+					}
+				}
+				else if (cmd == 3)
+				{
+					if(r)
+					{
+						for (uint8_t i = t_counter; i < len-1; i++)
+						{
+							t_buff[i - t_counter] = buffer[i];
+						}
+						printf("request command \n");
+						time_request = atoi(t_buff);
+						printf("time_request %d\n", time_request);
+							cmd = 0;
+						for (uint8_t i = 0; i < 100; i++)
+						{
+							buffer[i] = 0x00;
+						}
+					}
+					else
+					{
+						printf("no request command \n");
+					}
+				}
+				Transfer_cplt = 0; //Reset lai bien tranfer_complete
+			}
+	
+  }
+  /* USER CODE END 3 */
+
+}
+
+/** System Clock Configuration
+*/
+void SystemClock_Config(void)
+{
+
+  RCC_OscInitTypeDef RCC_OscInitStruct;
+  RCC_ClkInitTypeDef RCC_ClkInitStruct;
+
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  HAL_SYSTICK_Config(HAL_RCC_GetHCLKFreq()/1000);
+
+  HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
+
+  /* SysTick_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
+}
+
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @param  None
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler */
+  /* User can add his own implementation to report the HAL error return state */
+  while(1) 
+  {
+  }
+  /* USER CODE END Error_Handler */ 
+}
+
+#ifdef USE_FULL_ASSERT
+
+/**
+   * @brief Reports the name of the source file and the source line number
+   * where the assert_param error has occurred.
+   * @param file: pointer to the source file name
+   * @param line: assert_param error line source number
+   * @retval None
+   */
+void assert_failed(uint8_t* file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+    ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+
+}
+
+#endif
+
+/**
+  * @}
+  */ 
+
+/**
+  * @}
+*/ 
+
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
